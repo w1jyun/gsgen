@@ -48,6 +48,7 @@ import imageio
 from torch.utils.tensorboard import SummaryWriter
 from rich.console import Console
 from torchmetrics import PearsonCorrCoef
+from model_renderer import ModelRenderer
 
 console = Console()
 
@@ -62,7 +63,7 @@ def convert_to_image(outs):
 class Trainer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-
+        print(cfg)
         self.cfg = cfg
         self.step = 0
         self.max_steps = cfg.max_steps
@@ -108,6 +109,8 @@ class Trainer(nn.Module):
 
         if self.mode == "text_to_3d":
             self.dataset = CameraPoseProvider(cfg.data)
+            # TODO fov
+            self.modelRenderer = ModelRenderer(cfg.init.mesh)
         elif self.mode == "image_to_3d":
             self.dataset = SingleViewCameraPoseProvider(cfg.data)
             self.text_prompt = self.cfg.prompt.prompt
@@ -197,29 +200,11 @@ class Trainer(nn.Module):
         addtional_tags = self.cfg.get("tags", [])
         tags = tags + addtional_tags
 
-        if cfg.wandb:
-            wandb.init(
-                project="gsgen",
-                name=uid,
-                config=to_primitive(cfg),
-                sync_tensorboard=True,
-                # magic=True,
-                save_code=True,
-                group=overrided_group,
-                notes=notes,
-                tags=tags,
-            )
-            wandb.watch(
-                self.renderer,
-                log="all",
-                log_freq=100,
-            )
-
         self.writer = SummaryWriter(str(self.log_dir))
 
         cmd = get_current_cmd()
         self.writer.add_text("cmd", cmd, 0)
-        self.save_code_snapshot()
+        # self.save_code_snapshot()
         self.start = 0
         self.last_out = None
 
@@ -293,6 +278,9 @@ class Trainer(nn.Module):
         batch = next(self.loader)
         out = self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only)
         prompt_embeddings = self.prompt_processor()
+        ## TODO: calculate control
+        print('batch', batch)
+        control = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
         guidance_out = self.guidance(
             out["rgb"],
             prompt_embeddings,
@@ -301,6 +289,7 @@ class Trainer(nn.Module):
             camera_distance=batch["camera_distance"],
             c2w=batch["c2w"],
             rgb_as_latents=False,
+            control_cond = control,
         )
         loss = 0.0
         if "loss_sds" in guidance_out.keys():
@@ -620,6 +609,7 @@ class Trainer(nn.Module):
                 pbar.set_postfix(loss=f"{loss:.4f}")
                 pbar.update(1)
 
+    # image to 3d
     def train_step_sit3d(self):
         self.train()
         batch = next(self.loader)
@@ -813,6 +803,7 @@ class Trainer(nn.Module):
                     batch = get_dict_slice(all_data, i, i + bs)
                     out = self.renderer(batch)
                     if self.cfg.upsample_tune.loss.sds > 0.0:
+                        ## TODO: calculate control
                         guidance_out = self.guidance(
                             out["rgb"],
                             self.prompt_processor(),
@@ -820,6 +811,7 @@ class Trainer(nn.Module):
                             elevation=batch["elevation"],
                             azimuth=batch["azimuth"],
                             camera_distance=batch["camera_distance"],
+                            controlnet_cond=control
                         )
                     image_gt = upsampled_images[i : i + bs].to(self.cfg.device)
 

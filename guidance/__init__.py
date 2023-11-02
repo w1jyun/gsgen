@@ -21,6 +21,7 @@ class BaseGuidance(torch.nn.Module):
 
 
 from .stable_diffusion import StableDiffusionGuidance
+from .controlnet import ControlNetGuidance
 from .stable_diffusion_vsd import StableDiffusionVSDGuidance
 from .deep_floyd import DeepFloydGuidance
 from .point_e import PointEGuidance
@@ -28,6 +29,7 @@ from .make_it_3d import MakeIt3DGuidance
 
 guidances = dict(
     stable_diffusion=StableDiffusionGuidance,
+    controlnet=ControlNetGuidance,
     deep_floyd=DeepFloydGuidance,
     point_e=PointEGuidance,
     stable_diffusion_vsd=StableDiffusionVSDGuidance,

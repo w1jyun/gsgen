@@ -1,6 +1,5 @@
 import torch
 from kornia.losses.ssim import SSIMLoss, ssim_loss
-from torchmetrics import PearsonCorrCoef
 import torch.nn as nn
 
 

@@ -227,6 +227,9 @@ class CameraInfo:
         self.near_plane = near_plane
         self.far_plane = far_plane
 
+    def getFov(self):
+        return self.yfov
+    
     def downsample(self, scale):
         self.fx /= scale
         self.fy /= scale

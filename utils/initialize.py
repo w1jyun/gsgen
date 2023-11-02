@@ -9,7 +9,6 @@ from utils.ops import lift_to_3d, farthest_point_sampling
 from utils.camera import CameraInfo
 from utils.mesh import load_mesh_as_pcd, load_mesh_as_pcd_trimesh
 from rich.console import Console
-
 console = Console()
 
 

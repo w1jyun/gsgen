@@ -3,6 +3,7 @@ from .deep_floyd_prompt import DeepFloydPromptProcessor
 
 prompt_processors = dict(
     stable_diffusion=StableDiffusionPromptProcessor,
+    controlnet=StableDiffusionPromptProcessor,
     deep_floyd=DeepFloydPromptProcessor,
 )
 
