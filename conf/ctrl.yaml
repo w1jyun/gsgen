@@ -8,7 +8,7 @@ rgb_only: false
 optimizer:
   type: Adam
   opt_args:
-    eps: 1.0e-15
+    eps: 1.0e-5
 lr:
   mean:
   - 0.005
@@ -27,7 +27,7 @@ lr:
 init:
   type: mesh
   mesh: ${path}
-  num_points: 4096
+  num_points: 1024
   mean_std: 1.0
   svec_val: 0.02
   alpha_val: 0.8
@@ -35,7 +35,7 @@ init:
   facex: true
 mesh: ${path}
 eval:
-  image_period: 100
+  image_period: 50
   video_period: 500
   elevation: 45
   n_frames: 30
@@ -56,9 +56,10 @@ estimators:
   normal:
     enabled: false
     value: 0.0
-log_period: 100
-save_period: 2000
-wandb: false
+log_period: 10
+save_period: 100
+flip_yz: true
+wandb: False
 notes: ''
 data:
   device: ${device}
@@ -79,8 +80,8 @@ data:
   elevation_real_uniform: true
   elevation_warmup: 0
   camera_distance:
-  - 2.5
-  - 2.5
+  - 0.5
+  - 1.2
   focal:
   - 0.75
   - 1.35
@@ -89,7 +90,7 @@ data:
   - 512
   reso_milestones: []
   near_plane: 0.01
-  far_plane: 100.0
+  far_plane: 10000.0
   stratified_on_azimuth: true
 guidance:
   type: controlnet
