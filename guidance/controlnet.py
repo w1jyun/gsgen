@@ -7,13 +7,18 @@ from diffusers import (
     PNDMScheduler,
     StableDiffusionXLControlNetPipeline,
     ControlNetModel,
+    StableDiffusionControlNetPipeline,
 )
+from torchvision.utils import save_image
+
+from .dreamtime import Timestep
 
 from utils.typing import *
 from utils.ops import perpendicular_component
 from utils.misc import C
 from rich.console import Console
-
+import torch.nn as nn
+import numpy as np
 console = Console()
 
 # from prompt.prompt_processors import BasePromptProcessor, PromptEmbedding
@@ -49,7 +54,7 @@ class ControlNetGuidance(BaseGuidance):
     def __init__(self, cfg) -> None:
         super().__init__(cfg)
         self.weights_dtype = (
-            torch.float16 if self.cfg.half_precision_weights else torch.float32
+            torch.float32
         )
 
         if self.cfg.keep_complete_pipeline:
@@ -58,7 +63,6 @@ class ControlNetGuidance(BaseGuidance):
             }
         else:
             pipe_kwargs = {
-                "tokenizer": None,
                 "torch_dtype": self.weights_dtype,
                 "cache_dir": "./.cache",
             }
@@ -67,11 +71,9 @@ class ControlNetGuidance(BaseGuidance):
             success = False
             while not success:
                 try:
-                    self.controlnet = ControlNetModel.from_pretrained(
-                        "diffusers/controlnet-canny-sdxl-1.0"
-                    )
-                    self.pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
-                        "stabilityai/stable-diffusion-xl-base-1.0",
+                    self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=self.weights_dtype)
+                    self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
+                        "runwayml/stable-diffusion-v1-5",
                         controlnet=self.controlnet,
                         **pipe_kwargs,
                     ).to(self.device)
@@ -83,17 +85,16 @@ class ControlNetGuidance(BaseGuidance):
                     success = True
                     break
         else:
-            self.controlnet = ControlNetModel.from_pretrained(
-                "diffusers/controlnet-canny-sdxl-1.0"
-            )
-            self.pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0",
+            self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=self.weights_dtype)
+            self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
+                "runwayml/stable-diffusion-v1-5",
                 controlnet=self.controlnet,
                 **pipe_kwargs,
             )
 
-        self.vae = self.pipe.vae.cuda().eval()
-        self.unet = self.pipe.unet.cuda().eval()
+        self.vae = self.pipe.vae.eval()
+        self.unet = self.pipe.unet.eval()
+        # self.unet = nn.DataParallel(unet).to(self.device)
 
         for p in self.vae.parameters():
             p.requires_grad_(False)
@@ -119,6 +120,7 @@ class ControlNetGuidance(BaseGuidance):
         self.set_min_max_steps()
         self.grad_clip_val = None
         self.alphas = self.scheduler.alphas_cumprod.to(self.device)
+        self.Timestep = Timestep(num_of_timestep=int(self.num_train_timesteps * 0.5), num_of_iters=self.max_steps)
         if self.cfg.enable_attention_slicing:
             # enable GPU VRAM saving, reference: https://huggingface.co/stabilityai/stable-diffusion-2
             self.pipe.enable_attention_slicing(1)
@@ -139,6 +141,9 @@ class ControlNetGuidance(BaseGuidance):
         controlnet_cond,
     ):
         input_dtype = latents.dtype
+        latents = latents.cpu()
+        t = t.cpu()
+        encoder_hidden_states = encoder_hidden_states.cpu()
         down_block_res_samples, mid_block_res_sample = self.controlnet(
             latents,
             t,
@@ -151,19 +156,16 @@ class ControlNetGuidance(BaseGuidance):
             latents.to(self.weights_dtype),
             t.to(self.weights_dtype),
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
-            down_block_additional_residuals=down_block_res_samples.to(self.weights_dtype),
-            mid_block_additional_residual=mid_block_res_sample.to(self.weights_dtype),
+            down_block_additional_residuals=down_block_res_samples,
+            mid_block_additional_residual=mid_block_res_sample,
         ).sample.to(input_dtype)
 
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(self, imgs):
         input_dtype = imgs.dtype
         imgs = imgs * 2.0 - 1.0
-        self.vae.cuda()
-        posterior = self.vae.encode(imgs.to(self.weights_dtype)).latent_dist
-        print('posterior', posterior)
+        posterior = self.vae.encode(imgs.to(torch.float32).cpu()).latent_dist
         latents = posterior.sample() * self.vae.config.scaling_factor
-        self.vae.cpu()
         return latents.to(input_dtype)
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -193,7 +195,7 @@ class ControlNetGuidance(BaseGuidance):
         controlnet_cond,
     ):
         batch_size = elevation.shape[0]
-
+        controlnet_cond = self.pipe.prepare_image(controlnet_cond, 512, 512, batch_size, 1, 'cpu', torch.float32, do_classifier_free_guidance=True).to(dtype=torch.float32)
         if prompt_embedding.use_perp_negative:
             (
                 text_embeddings,
@@ -202,7 +204,7 @@ class ControlNetGuidance(BaseGuidance):
                 elevation, azimuth, camera_distances, self.cfg.use_view_dependent_prompt
             )
             with torch.no_grad():
-                noise = torch.randn_like(latents)
+                noise = torch.randn_like(latents).cpu()
                 latents_noisy = self.scheduler.add_noise(latents, noise, t)
                 latent_model_input = torch.cat([latents_noisy] * 4, dim=0)
                 noise_pred = self.forward_unet(
@@ -234,10 +236,10 @@ class ControlNetGuidance(BaseGuidance):
             text_embeddings = prompt_embedding.get_text_embedding(
                 elevation, azimuth, camera_distances, self.cfg.use_view_dependent_prompt
             )
-            # predict the noise residual with unet, NO grad!
+
             with torch.no_grad():
                 # add noise
-                noise = torch.randn_like(latents)  # TODO: use torch generator
+                noise = torch.randn_like(latents).cpu()  # TODO: use torch generator
                 latents_noisy = self.scheduler.add_noise(latents, noise, t)
                 # pred noise
                 latent_model_input = torch.cat([latents_noisy] * 2, dim=0)
@@ -246,21 +248,19 @@ class ControlNetGuidance(BaseGuidance):
                     torch.cat([t] * 2),
                     encoder_hidden_states=text_embeddings,
                     controlnet_cond=controlnet_cond,
-                )
+                ).cpu()
 
             # perform guidance (high scale from paper!)
-            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
-                noise_pred_text - noise_pred_uncond
-            )
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond +  self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
-            w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+            w = (1 - self.alphas[t]).view(-1, 1, 1, 1).cpu()
         elif self.cfg.weighting_strategy == "uniform":
             w = 1
         elif self.cfg.weighting_strategy == "fantasia3d":
-            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1)
+            w = (self.alphas[t] ** 0.5 * (1 - self.alphas[t])).view(-1, 1, 1, 1).cpu()
         else:
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
@@ -277,6 +277,15 @@ class ControlNetGuidance(BaseGuidance):
             "noise_pred": noise_pred,
         }
 
+        # pred_rgb_ = self.decode_latents(latents)
+        # noisy = self.decode_latents(latents_noisy)
+        # pred_minus_noise = self.decode_latents(grad)
+        # target = self.decode_latents(latents - grad)
+        # arr = [pred_rgb_, noisy, controlnet_cond, pred_minus_noise, target]
+        # viz_images = torch.cat(arr)
+        # print('output_')
+        # save_image(viz_images, 'output_.png')
+
         return grad, guidance_eval_utils
 
     def forward(
@@ -286,9 +295,10 @@ class ControlNetGuidance(BaseGuidance):
         elevation,
         azimuth,
         camera_distance,
-        controlnet_cond = None,
+        controlnet_cond,
         rgb_as_latents=False,
         guidance_eval=False,
+        idx=0,
         **kwargs,
     ):
         bs = rgb.shape[0]
@@ -304,6 +314,13 @@ class ControlNetGuidance(BaseGuidance):
             )
             # encode image into latents with vae
             latents = self.encode_images(rgb_BCHW_512)
+
+        # ts = []
+        # for b in range(bs):
+        #     t_ = self.Timestep.timestep(idx * bs + b)
+        #     ts.append(t_)
+        # t = torch.tensor(ts, dtype=torch.long, device='cpu')
+        # print('timestep: ', ts)
 
         t = torch.randint(
             self.min_t_step,

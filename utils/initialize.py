@@ -71,8 +71,8 @@ def unisphere_initialize(cfg):
     phi = torch.rand(N)
     phi = torch.acos(1 - 2 * phi)
     x = R * torch.sin(phi) * torch.cos(theta)
-    y = R * torch.sin(phi) * torch.sin(theta)
-    z = R * torch.cos(phi)
+    z = R * torch.sin(phi) * torch.sin(theta)
+    y = R * torch.cos(phi)
 
     initial_values = {}
     initial_values["mean"] = torch.stack([x, y, z], dim=1)
@@ -92,8 +92,8 @@ def semisphere_initialize(cfg):
     phi = torch.rand(N)
     phi = torch.acos(1 - 2 * phi)
     x = R * torch.sin(phi) * torch.cos(theta)
-    y = R * torch.sin(phi) * torch.sin(theta)
-    z = R * torch.cos(phi)
+    z = R * torch.sin(phi) * torch.sin(theta)
+    y = R * torch.cos(phi)
 
     initial_values = {}
     initial_values["mean"] = torch.stack([x, y, z], dim=1)
@@ -288,10 +288,10 @@ def mesh_initlization(cfg):
     if rgb.shape[-1] == 4:
         rgb = rgb[..., :3]
 
-    xyz -= xyz.mean(dim=0, keepdim=True)
+    # xyz -= xyz.mean(dim=0, keepdim=True)
 
-    xyz = xyz / (xyz.norm(dim=-1).max() + 1e-5)
-    xyz = xyz * cfg.mean_std
+    # xyz = xyz / (xyz.norm(dim=-1).max() + 1e-5)
+    # xyz = xyz * cfg.mean_std
 
     # if xyz.shape[0] > cfg.num_points:
     #     _, idx = farthest_point_sampling(xyz, cfg.num_points)
@@ -300,10 +300,10 @@ def mesh_initlization(cfg):
     # else:
     #     cfg.num_points = xyz.shape[0]
 
-    if cfg.get("flip_yz", False):
-        console.print("[red]will flip the y and z axis")
-        x, y, z = xyz.chunk(3, dim=-1)
-        xyz = torch.cat([x, z, y], dim=-1)
+    # if cfg.get("flip_yz", False):
+    console.print("[red]will flip the y and z axis")
+    x, y, z = xyz.chunk(3, dim=-1)
+    xyz = torch.cat([x, z, y], dim=-1)
 
     if cfg.get("flip_xy", False):
         console.print("[red]will flip the x and y axis")

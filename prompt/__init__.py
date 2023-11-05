@@ -1,9 +1,10 @@
 from .stable_diffusion_prompt import StableDiffusionPromptProcessor
+from .controlnet_prompt import ControlNetPromptProcessor
 from .deep_floyd_prompt import DeepFloydPromptProcessor
 
 prompt_processors = dict(
     stable_diffusion=StableDiffusionPromptProcessor,
-    controlnet=StableDiffusionPromptProcessor,
+    controlnet=ControlNetPromptProcessor,
     deep_floyd=DeepFloydPromptProcessor,
 )
 

@@ -360,7 +360,7 @@ class BasePromptProcessor(nn.Module):
                 if os.path.exists(cache_path):
                     continue
             prompts_to_process.append(prompt)
-
+            
         if len(prompts_to_process) > 0:
             prompt_embeddings = self.encode_prompts(prompts_to_process)
 

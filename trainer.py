@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision.transforms import ToTensor
 import torch.nn.functional as F
+import einops
 from einops import repeat
 from omegaconf import OmegaConf
 from data import CameraPoseProvider, SingleViewCameraPoseProvider
@@ -49,9 +50,28 @@ from torch.utils.tensorboard import SummaryWriter
 from rich.console import Console
 from torchmetrics import PearsonCorrCoef
 from model_renderer import ModelRenderer
+import cv2
 
 console = Console()
 
+def HWC3(x):
+    assert x.dtype == np.uint8
+    if x.ndim == 2:
+        x = x[:, :, None]
+    assert x.ndim == 3
+    H, W, C = x.shape
+    assert C == 1 or C == 3 or C == 4
+    if C == 3:
+        return x
+    if C == 1:
+        return np.concatenate([x, x, x], axis=2)
+    if C == 4:
+        color = x[:, :, 0:3].astype(np.float32)
+        alpha = x[:, :, 3:4].astype(np.float32) / 255.0
+        y = color * alpha + 255.0 * (1.0 - alpha)
+        y = y.clip(0, 255).astype(np.uint8)
+        return y
+    
 
 def convert_to_image(outs):
     outs["depth"] = apply_depth_colormap(outs["depth"], outs["opacity"])
@@ -166,21 +186,17 @@ class Trainer(nn.Module):
         self.renderer.setup_lr(cfg.lr)
         self.renderer.set_optimizer(cfg.optimizer)
 
-        if self.cfg.auxiliary.enabled:
-            self.aux_guidance = get_guidance(cfg.auxiliary)
-            self.aux_guidance.set_text(
-                self.cfg.auxiliary.get("prompt", self.cfg.prompt.prompt)
-            )
+        # if self.cfg.auxiliary.enabled:
+        #     self.aux_guidance = get_guidance(cfg.auxiliary)
+        #     self.aux_guidance.set_text(
+        #         self.cfg.auxiliary.get("prompt", self.cfg.prompt.prompt)
+        #     )
 
         self.guidance = get_guidance(cfg.guidance)
-        if self.cfg.guidance.get("keep_complete_pipeline", False):
-            self.prompt_processor = get_prompt_processor(
-                cfg.prompt, guidance_model=self.guidance
-            )
-        else:
-            self.prompt_processor = get_prompt_processor(cfg.prompt)
+        self.prompt_processor = get_prompt_processor(
+            cfg.prompt, guidance_model=self.guidance
+        )
 
-        self.prompt_processor.cleanup()
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -194,7 +210,7 @@ class Trainer(nn.Module):
         if not self.eval_dir.exists():
             self.eval_dir.mkdir(parents=True, exist_ok=True)
 
-        wandb.tensorboard.patch(root_logdir=str(self.log_dir))
+        # wandb.tensorboard.patch(root_logdir=str(self.log_dir))
 
         overrided_group = self.cfg.get("group", prompt)
         addtional_tags = self.cfg.get("tags", [])
@@ -273,14 +289,25 @@ class Trainer(nn.Module):
         self.guidance.update(step)
         self.prompt_processor.update(step)
 
-    def train_step(self):
+    def train_step(self, idx):
         self.train()
         batch = next(self.loader)
         out = self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only)
         prompt_embeddings = self.prompt_processor()
         ## TODO: calculate control
-        print('batch', batch)
-        control = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+        controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+        control_conds = []
+        for control in controls:
+            control = np.array(control)
+            low_threshold = 100
+            high_threshold = 200
+
+            image = cv2.Canny(control, low_threshold, high_threshold)
+            image = image[:, :, None]
+            image = np.concatenate([image, image, image], axis=2)
+            control = Image.fromarray(image)
+            control_conds.append(control)
+
         guidance_out = self.guidance(
             out["rgb"],
             prompt_embeddings,
@@ -289,13 +316,15 @@ class Trainer(nn.Module):
             camera_distance=batch["camera_distance"],
             c2w=batch["c2w"],
             rgb_as_latents=False,
-            control_cond = control,
+            controlnet_cond = control_conds,
+            idx = idx
         )
         loss = 0.0
         if "loss_sds" in guidance_out.keys():
             loss += (
-                C(self.cfg.loss.sds, self.step, self.max_steps)
-                * guidance_out["loss_sds"]
+                # C(self.cfg.loss.sds, self.step, self.max_steps)
+                # * guidance_out["loss_sds"]
+                guidance_out["loss_sds"]
             )
             self.writer.add_scalar(
                 "loss_weights/sds",
@@ -575,7 +604,7 @@ class Trainer(nn.Module):
 
                 for _ in range(self.cfg.grad_accum):
                     if self.mode == "text_to_3d":
-                        loss += self.train_step()
+                        loss += self.train_step(s)
                     elif self.mode == "image_to_3d":
                         loss += self.train_step_sit3d()
                     else:
@@ -746,6 +775,7 @@ class Trainer(nn.Module):
 
         self.renderer.eval()
 
+        ## 이어서
         cache_uid = f"{self.cfg.prompt.prompt.replace(' ', '')}_{self.cfg.ckpt.replace('/', '')}_{self.cfg.upsample_tune.num_poses}"
 
         cache_tmp_file = Path(f"./tmp/{cache_uid}.pt")
