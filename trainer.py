@@ -294,37 +294,62 @@ class Trainer(nn.Module):
         batch = next(self.loader)
         out = self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only)
         prompt_embeddings = self.prompt_processor()
+        guidance_out = None
         ## TODO: calculate control
-        controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
-        control_conds = []
-        for control in controls:
-            control = np.array(control)
-            low_threshold = 100
-            high_threshold = 200
 
-            image = cv2.Canny(control, low_threshold, high_threshold)
-            image = image[:, :, None]
-            image = np.concatenate([image, image, image], axis=2)
-            control = Image.fromarray(image)
-            control_conds.append(control)
+        # change guidance(stable -> control)
+        if idx == 1000:
+            del self.guidance, self.prompt_processor
+            self.guidance = get_guidance(self.cfg.guidance2)
+            self.prompt_processor = get_prompt_processor(
+                self.cfg.prompt, guidance_model=self.guidance
+            )
+            gc.collect()
+            torch.cuda.empty_cache()
 
-        guidance_out = self.guidance(
-            out["rgb"],
-            prompt_embeddings,
-            elevation=batch["elevation"],
-            azimuth=batch["azimuth"],
-            camera_distance=batch["camera_distance"],
-            c2w=batch["c2w"],
-            rgb_as_latents=False,
-            controlnet_cond = control_conds,
-            idx = idx
-        )
+        if idx < 1000:
+            guidance_out = self.guidance(
+                out["rgb"],
+                prompt_embeddings,
+                elevation=batch["elevation"],
+                azimuth=batch["azimuth"],
+                camera_distance=batch["camera_distance"],
+                c2w=batch["c2w"],
+                rgb_as_latents=False,
+            )
+        else:
+            controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+            control_conds = []
+            for control in controls:
+                control = np.array(control)
+                low_threshold = 100
+                high_threshold = 200
+
+                image = cv2.Canny(control, low_threshold, high_threshold)
+                image = image[:, :, None]
+                image = np.concatenate([image, image, image], axis=2)
+                # control = Image.fromarray(image)
+                control_conds.append(control)
+            control_conds = np.array(control_conds)
+            control_conds = torch.from_numpy(control_conds)
+            guidance_out = self.guidance(
+                out["rgb"],
+                prompt_embeddings,
+                elevation=batch["elevation"],
+                azimuth=batch["azimuth"],
+                camera_distance=batch["camera_distance"],
+                c2w=batch["c2w"],
+                rgb_as_latents=False,
+                controlnet_cond = control_conds,
+                idx = idx
+            )
+        
         loss = 0.0
         if "loss_sds" in guidance_out.keys():
             loss += (
-                # C(self.cfg.loss.sds, self.step, self.max_steps)
-                # * guidance_out["loss_sds"]
-                guidance_out["loss_sds"]
+                C(self.cfg.loss.sds, self.step, self.max_steps)
+                * guidance_out["loss_sds"]
+                # guidance_out["loss_sds"]
             )
             self.writer.add_scalar(
                 "loss_weights/sds",

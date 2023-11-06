@@ -15,7 +15,17 @@ class ControlNetPromptProcessor(BasePromptProcessor):
         self.pipe = guidance_model.pipe
 
     def encode_prompts(self, prompts):
-        return self.pipe._encode_prompt(prompts, device='cpu', num_images_per_prompt=1, do_classifier_free_guidance=True)
-    
+        with torch.no_grad():
+            print(prompts)
+            tokens = self.tokenizer(
+                prompts,
+                padding="max_length",
+                max_length=self.tokenizer.model_max_length,
+                return_tensors="pt",
+            ).to(self.device)
+            # print(tokens.input_ids.device)
+            text_embeddings = self.text_encoder(tokens.input_ids)[0]
+
+        return text_embeddings
     def update(self, step):
         pass

@@ -8,7 +8,7 @@ rgb_only: false
 optimizer:
   type: Adam
   opt_args:
-    eps: 1.0e-5
+    eps: 1.0e-15
 lr:
   mean:
   - 0.005
@@ -57,7 +57,7 @@ estimators:
     enabled: false
     value: 0.0
 log_period: 10
-save_period: 100
+save_period: 2000
 flip_yz: true
 wandb: False
 notes: ''
@@ -80,8 +80,8 @@ data:
   elevation_real_uniform: true
   elevation_warmup: 0
   camera_distance:
-  - 0.5
-  - 1.2
+  - 2.5
+  - 2.5
   focal:
   - 0.75
   - 1.35
@@ -93,6 +93,28 @@ data:
   far_plane: 10000.0
   stratified_on_azimuth: true
 guidance:
+  type: stable_diffusion
+  max_steps: ${max_steps}
+  device: ${device}
+  pretrained_model_name_or_path: runwayml/stable-diffusion-v1-5
+  keep_complete_pipeline: false
+  repeat_until_success: true
+  half_precision_weights: true
+  use_view_dependent_prompt: true
+  enable_attention_slicing: false
+  scheduler:
+    type: ddim
+    args: null
+  guidance_scale: 100.0
+  weighting_strategy: sds
+  min_step_percent: 0.02
+  max_step_percent:
+  - 2000
+  - 0.98
+  - 0.5
+  - 2001
+  grad_clip: null
+guidance2:
   type: controlnet
   max_steps: ${max_steps}
   device: ${device}
