@@ -5,6 +5,7 @@ from .deep_floyd_prompt import DeepFloydPromptProcessor
 prompt_processors = dict(
     stable_diffusion=StableDiffusionPromptProcessor,
     controlnet=ControlNetPromptProcessor,
+    controlnet_gpu=ControlNetPromptProcessor,
     deep_floyd=DeepFloydPromptProcessor,
 )
 
