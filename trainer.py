@@ -298,7 +298,7 @@ class Trainer(nn.Module):
         ## TODO: calculate control
 
         # change guidance(stable -> control)
-        if idx == 1000:
+        if idx == 5000:
             del self.guidance, self.prompt_processor
             self.guidance = get_guidance(self.cfg.guidance2)
             self.prompt_processor = get_prompt_processor(
@@ -307,7 +307,7 @@ class Trainer(nn.Module):
             gc.collect()
             torch.cuda.empty_cache()
 
-        if idx < 1000:
+        if idx < 5000:
             guidance_out = self.guidance(
                 out["rgb"],
                 prompt_embeddings,
