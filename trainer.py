@@ -179,7 +179,7 @@ class Trainer(nn.Module):
         elif self.mode == "text_to_3d":
             initial_values = initialize(cfg.init)
         # initial_values = base_initialize(cfg.init)
-        self.modelRenderer = ModelRenderer(cfg.init.mesh, initial_values["center"], initial_values["scale"])
+        self.modelRenderer = ModelRenderer(cfg.init.mesh)
         self.renderer = GaussianSplattingRenderer(
             cfg.renderer, initial_values=initial_values
         ).to(cfg.device)
@@ -192,8 +192,8 @@ class Trainer(nn.Module):
         #         self.cfg.auxiliary.get("prompt", self.cfg.prompt.prompt)
         #     )
         
-        self.guidance = get_guidance(cfg.guidance)
-        if self.cfg.guidance.get("keep_complete_pipeline", False):
+        self.guidance = get_guidance(cfg.guidance2)
+        if self.cfg.guidance2.get("keep_complete_pipeline", False):
             self.prompt_processor = get_prompt_processor(
                 cfg.prompt, guidance_model=self.guidance
             )
@@ -325,8 +325,19 @@ class Trainer(nn.Module):
         else:
             controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
             control_conds = []
+            masks = []
             for control in controls:
                 control = np.array(control)
+                # find mask
+                mask = np.zeros_like(control)
+                H = control.shape[0]
+                W = control.shape[1]
+                for h in range(H):
+                    for w in range(W):
+                        if not np.array_equal(control[h][w], np.array([0,0,255])):
+                            mask[h][w] = [1.0,1.0,1.0]
+                masks.append(mask)
+                # make control image
                 low_threshold = 100
                 high_threshold = 200
 
@@ -345,9 +356,11 @@ class Trainer(nn.Module):
                 c2w=batch["c2w"],
                 rgb_as_latents=False,
                 controlnet_cond = control_conds,
+                mask = np.array(masks),
+                bg = out["bg"],
                 idx = idx
             )
-        
+
         loss = 0.0
         if "loss_sds" in guidance_out.keys():
             loss += (
@@ -362,6 +375,17 @@ class Trainer(nn.Module):
             )
 
             self.writer.add_scalar("loss/sds", guidance_out["loss_sds"], self.step)
+
+        if "loss_mask" in guidance_out.keys():
+            loss += (
+                guidance_out["loss_mask"]
+            )
+            self.writer.add_scalar(
+                "loss_weights/mask",
+                C(self.cfg.loss.sds, self.step, self.max_steps),
+                self.step,
+            )
+            self.writer.add_scalar("loss/mask", guidance_out["loss_mask"], self.step)
 
         if "loss_vsd" in guidance_out.keys():
             loss += (

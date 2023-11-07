@@ -7,17 +7,18 @@ import matplotlib.pyplot as plt
 import torch
 
 class ModelRenderer():
-    def __init__(self, path, center, scale):
+    def __init__(self, path):
         if platform.system() == "Linux":
             os.environ['PYOPENGL_PLATFORM'] = 'egl'
         model_w = trimesh.load('w_'+path, force='mesh', file_type='glb')
         model_b = trimesh.load('b_'+path, force='mesh', file_type='glb')
 
         # normalize mesh
-        # model = trimesh.load(path, force='mesh', skip_material=True, process=False)
-        # scale = 1.0 / np.array(model.bounds[1] - model.bounds[0]).max()
-        # center = np.array(model.bounds[1] + model.bounds[0]) / (-2)
-        center = -center[0]
+        model = trimesh.load(path, force='mesh', skip_material=True, process=False)
+        scale = 1.0 / np.array(model.bounds[1] - model.bounds[0]).max()
+        center = np.array(model.bounds[1] + model.bounds[0]) / (-2)
+        # center = -center[0]
+        # print(center, scale)
         model_w.apply_transform(trimesh.transformations.translation_matrix(center))
         model_w.apply_transform(trimesh.transformations.scale_matrix(scale))
         model_b.apply_transform(trimesh.transformations.translation_matrix(center))

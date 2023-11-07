@@ -1301,6 +1301,7 @@ class GaussianSplattingRenderer(torch.nn.Module):
         # NOTE: initial value of T is 1.0, which means no occlusion
         T = torch.ones([H, W, 1], device=self.device, dtype=torch.float32)
         rays_d = camera_info.get_rays_d(c2w)
+        bg = self.bg(rays_d)
         out = render_with_T(
             mean,
             cov,
@@ -1318,7 +1319,7 @@ class GaussianSplattingRenderer(torch.nn.Module):
             H,
             W,
             self.T_thresh,
-            self.bg(rays_d),
+            bg,
         ).view(H, W, 3)
 
         # TODO: deprecate this flag
@@ -1330,6 +1331,7 @@ class GaussianSplattingRenderer(torch.nn.Module):
 
         outputs = {}
         outputs["rgb"] = out
+        outputs["bg"] = bg
 
         if not rgb_only:
             tic()
