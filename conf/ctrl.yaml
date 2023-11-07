@@ -80,8 +80,8 @@ data:
   elevation_real_uniform: true
   elevation_warmup: 0
   camera_distance:
-  - 2.5
-  - 2.5
+  - 1.0
+  - 1.5
   focal:
   - 0.75
   - 1.35
@@ -98,7 +98,7 @@ guidance:
   device: ${device}
   pretrained_model_name_or_path: runwayml/stable-diffusion-v1-5
   keep_complete_pipeline: false
-  repeat_until_success: true
+  repeat_until_success: false
   half_precision_weights: true
   use_view_dependent_prompt: true
   enable_attention_slicing: false
@@ -118,7 +118,7 @@ guidance2:
   type: controlnet
   max_steps: ${max_steps}
   device: ${device}
-  pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+  pretrained_model_name_or_path: runwayml/stable-diffusion-v1-5
   keep_complete_pipeline: false
   repeat_until_success: false
   half_precision_weights: true
@@ -137,7 +137,7 @@ guidance2:
   - 2001
   grad_clip: null
 prompt:
-  type: controlnet
+  type: stable_diffusion
   device: ${guidance.device}
   pretrained_model_name_or_path: ${guidance.pretrained_model_name_or_path}
   prompt: ${prompt}

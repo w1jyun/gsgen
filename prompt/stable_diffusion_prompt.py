@@ -14,12 +14,12 @@ class StableDiffusionPromptProcessor(BasePromptProcessor):
     def prepare_text_encoder(self, guidance_model=None):
         if guidance_model is None:
             self.tokenizer = AutoTokenizer.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0",
+                "runwayml/stable-diffusion-v1-5",
                 subfolder="tokenizer",
                 cache_dir="./.cache",
             )
             self.text_encoder = CLIPTextModel.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0",
+                "runwayml/stable-diffusion-v1-5",
                 subfolder="text_encoder",
                 device_map="auto",
                 cache_dir="./.cache",

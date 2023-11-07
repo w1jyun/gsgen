@@ -54,7 +54,7 @@ class ControlNetGuidanceGPU(BaseGuidance):
     def __init__(self, cfg) -> None:
         super().__init__(cfg)
         self.weights_dtype = (
-            torch.float16 if self.cfg.half_precision_weights else torch.float32
+            torch.float32
         )
 
         if self.cfg.keep_complete_pipeline:
@@ -141,6 +141,8 @@ class ControlNetGuidanceGPU(BaseGuidance):
         controlnet_cond,
     ):
         input_dtype = latents.dtype
+        latents = latents.to(self.weights_dtype)
+        t = t.to(self.weights_dtype)
         down_block_res_samples, mid_block_res_sample = self.controlnet(
             latents,
             t,
@@ -150,8 +152,8 @@ class ControlNetGuidanceGPU(BaseGuidance):
             return_dict=False,
         )
         return self.unet(
-            latents.to(self.weights_dtype),
-            t.to(self.weights_dtype),
+            latents,
+            t,
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
             down_block_additional_residuals=down_block_res_samples,
             mid_block_additional_residual=mid_block_res_sample,

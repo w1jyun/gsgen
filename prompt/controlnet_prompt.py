@@ -12,7 +12,9 @@ from .prompt_processors import BasePromptProcessor, PromptEmbedding
 
 class ControlNetPromptProcessor(BasePromptProcessor):
     def prepare_text_encoder(self, guidance_model=None):
-        self.pipe = guidance_model.pipe
+        # self.pipe = guidance_model.pipe
+        self.tokenizer = guidance_model.pipe.tokenizer
+        self.text_encoder = guidance_model.pipe.text_encoder
 
     def encode_prompts(self, prompts):
         with torch.no_grad():
@@ -20,7 +22,6 @@ class ControlNetPromptProcessor(BasePromptProcessor):
             tokens = self.tokenizer(
                 prompts,
                 padding="max_length",
-                max_length=self.tokenizer.model_max_length,
                 return_tensors="pt",
             ).to(self.device)
             # print(tokens.input_ids.device)

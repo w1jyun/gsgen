@@ -71,7 +71,7 @@ class ControlNetGuidance(BaseGuidance):
             success = False
             while not success:
                 try:
-                    self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-scribble", torch_dtype=self.weights_dtype)
+                    self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=self.weights_dtype)
                     self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
                         "runwayml/stable-diffusion-v1-5",
                         controlnet=self.controlnet,
@@ -85,7 +85,7 @@ class ControlNetGuidance(BaseGuidance):
                     success = True
                     break
         else:
-            self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-scribble", torch_dtype=self.weights_dtype)
+            self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=self.weights_dtype)
             self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
                 "runwayml/stable-diffusion-v1-5",
                 controlnet=self.controlnet,

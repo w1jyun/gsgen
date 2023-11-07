@@ -15,7 +15,7 @@ class ModelRenderer():
 
         # normalize mesh
         model = trimesh.load(path, force='mesh', skip_material=True, process=False)
-        scale = 0.8 / np.array(model.bounds[1] - model.bounds[0]).max()
+        scale = 1.0 / np.array(model.bounds[1] - model.bounds[0]).max()
         center = np.array(model.bounds[1] + model.bounds[0]) / (-2)
         
         model_w.apply_transform(trimesh.transformations.translation_matrix(center))

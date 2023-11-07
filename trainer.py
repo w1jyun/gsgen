@@ -191,11 +191,16 @@ class Trainer(nn.Module):
         #     self.aux_guidance.set_text(
         #         self.cfg.auxiliary.get("prompt", self.cfg.prompt.prompt)
         #     )
-
+        
         self.guidance = get_guidance(cfg.guidance)
-        self.prompt_processor = get_prompt_processor(
-            cfg.prompt, guidance_model=self.guidance
-        )
+        if self.cfg.guidance.get("keep_complete_pipeline", False):
+            self.prompt_processor = get_prompt_processor(
+                cfg.prompt, guidance_model=self.guidance
+            )
+        else:
+            self.prompt_processor = get_prompt_processor(cfg.prompt)
+
+        self.prompt_processor.cleanup()
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -298,7 +303,7 @@ class Trainer(nn.Module):
         ## TODO: calculate control
 
         # change guidance(stable -> control)
-        if idx == 5000:
+        if idx == 0:
             del self.guidance, self.prompt_processor
             self.guidance = get_guidance(self.cfg.guidance2)
             self.prompt_processor = get_prompt_processor(
@@ -307,7 +312,7 @@ class Trainer(nn.Module):
             gc.collect()
             torch.cuda.empty_cache()
 
-        if idx < 5000:
+        if idx < 0:
             guidance_out = self.guidance(
                 out["rgb"],
                 prompt_embeddings,
@@ -328,10 +333,9 @@ class Trainer(nn.Module):
                 image = cv2.Canny(control, low_threshold, high_threshold)
                 image = image[:, :, None]
                 image = np.concatenate([image, image, image], axis=2)
-                # control = Image.fromarray(image)
+                control = Image.fromarray(image)
                 control_conds.append(control)
-            control_conds = np.array(control_conds)
-            control_conds = torch.from_numpy(control_conds)
+                
             guidance_out = self.guidance(
                 out["rgb"],
                 prompt_embeddings,

@@ -52,7 +52,7 @@ def load_mesh_as_pcd(mesh_file, texture_file):
 def load_mesh_as_pcd_trimesh(mesh_file, num_points):
     mesh = as_mesh(trimesh.load_mesh(mesh_file))
     # normalize mesh
-    scale = 0.8 / np.array(mesh.bounds[1] - mesh.bounds[0]).max()
+    scale = 1.0 / np.array(mesh.bounds[1] - mesh.bounds[0]).max()
     center = np.array(mesh.bounds[1] + mesh.bounds[0]) / 2
     mesh.vertices = (mesh.vertices - center) * scale
     # print((mesh.vertices))
