@@ -120,7 +120,7 @@ class ControlNetGuidance(BaseGuidance):
         self.set_min_max_steps()
         self.grad_clip_val = None
         self.alphas = self.scheduler.alphas_cumprod.to(self.device)
-        self.Timestep = Timestep(num_of_timestep=int(self.num_train_timesteps * 0.5), num_of_iters=self.max_steps)
+        self.Timestep = Timestep(num_of_timestep=self.max_t_step, num_of_iters=self.max_steps)
         if self.cfg.enable_attention_slicing:
             # enable GPU VRAM saving, reference: https://huggingface.co/stabilityai/stable-diffusion-2
             self.pipe.enable_attention_slicing(1)
@@ -315,20 +315,20 @@ class ControlNetGuidance(BaseGuidance):
             # encode image into latents with vae
             latents = self.encode_images(rgb_BCHW_512)
 
-        # ts = []
-        # for b in range(bs):
-        #     t_ = self.Timestep.timestep(idx * bs + b)
-        #     ts.append(t_)
-        # t = torch.tensor(ts, dtype=torch.long, device='cpu')
-        # print('timestep: ', ts)
+        ts = []
+        for b in range(bs):
+            t_ = self.Timestep.timestep(idx * bs + b)
+            ts.append(t_)
+        t = torch.tensor(ts, dtype=torch.long, device='cpu')
+        print('timestep: ', ts)
 
-        t = torch.randint(
-            self.min_t_step,
-            self.max_t_step + 1,
-            [bs],
-            dtype=torch.long,
-            device=self.device,
-        )
+        # t = torch.randint(
+        #     self.min_t_step,
+        #     self.max_t_step + 1,
+        #     [bs],
+        #     dtype=torch.long,
+        #     device=self.device,
+        # )
 
         grad, guidance_eval_utils = self.compute_grad_sds(
             latents, t, prompt_embedding, elevation, azimuth, camera_distance, controlnet_cond

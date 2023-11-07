@@ -80,8 +80,8 @@ data:
   elevation_real_uniform: true
   elevation_warmup: 0
   camera_distance:
-  - 1.0
-  - 1.5
+  - 2.5
+  - 2.5
   focal:
   - 0.75
   - 1.35
