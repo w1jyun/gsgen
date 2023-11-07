@@ -5,7 +5,6 @@ import gc
 from diffusers import (
     DDIMScheduler,
     PNDMScheduler,
-    StableDiffusionXLControlNetPipeline,
     ControlNetModel,
     StableDiffusionControlNetPipeline,
 )
@@ -50,7 +49,7 @@ console = Console()
 #         return text_embeddings
 
 
-class ControlNetGuidanceGPU(BaseGuidance):
+class ControlNetGuidance(BaseGuidance):
     def __init__(self, cfg) -> None:
         super().__init__(cfg)
         self.weights_dtype = (
@@ -252,7 +251,7 @@ class ControlNetGuidanceGPU(BaseGuidance):
 
             # perform guidance (high scale from paper!)
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond +  self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
+            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
@@ -267,9 +266,7 @@ class ControlNetGuidanceGPU(BaseGuidance):
             )
 
         grad = w * (noise_pred - noise)
-        del noise, controlnet_cond, noise_pred_uncond, noise_pred_text, w
-        torch.cuda.empty_cache()
-        gc.collect()
+
         guidance_eval_utils = {
             "use_perp_neg": prompt_embedding.use_perp_negative,
             "neg_guidance_weights": neg_guidance_weights,
@@ -279,16 +276,16 @@ class ControlNetGuidanceGPU(BaseGuidance):
             "noise_pred": noise_pred,
         }
 
-        # if idx % 100 == 0:
-        #   pred_rgb_ = self.decode_latents(latents)
-        #   noisy = self.decode_latents(latents_noisy)
-        #   pred_minus_noise = self.decode_latents(grad)
-        #   target = self.decode_latents(latents - grad)
-        #   arr = [pred_rgb_, noisy, controlnet_cond, pred_minus_noise, target]
-        #   viz_images = torch.cat(arr)
-        #   save_image(viz_images, 'output_%d.png'%idx)
+        # pred_rgb_ = self.decode_latents(latents)
+        # noisy = self.decode_latents(latents_noisy)
+        # pred_minus_noise = self.decode_latents(grad)
+        # target = self.decode_latents(latents - grad)
+        # arr = [pred_rgb_, noisy, controlnet_cond, pred_minus_noise, target]
+        # viz_images = torch.cat(arr)
+        # print('output_')
+        # save_image(viz_images, 'output_.png')
 
-        return grad, guidance_eval_utils
+        return grad, guidance_eval_utils, controlnet_cond
 
     def forward(
         self,
@@ -300,10 +297,29 @@ class ControlNetGuidanceGPU(BaseGuidance):
         controlnet_cond,
         rgb_as_latents=False,
         guidance_eval=False,
+        mask=None,
+        bg=None,
         idx=0,
         **kwargs,
     ):
         bs = rgb.shape[0]
+        rgb_BCHW_512 = None
+
+        bg_color = (bg[0][0][0]).cpu().numpy()
+        rgb_np = rgb.detach().cpu().numpy()[0]
+
+        # print(rgb_np.shape)
+        rgb_np_mask = np.zeros_like(rgb_np)
+        H = rgb_np.shape[0]
+        W = rgb_np.shape[1]
+        for h in range(H):
+            for w in range(W):
+                if not np.array_equal(rgb_np[h][w], bg_color):
+                    rgb_np_mask[h][w] = [1.0,1.0,1.0]
+        # rgb_np_mask = np.where(np.array_equal(rgb_np, bg_color), np.array([0,0,0]), np.array([1,1,1]))
+        sketch_mask = torch.from_numpy(mask[0].astype(np.float32))
+        rgb_mask = torch.from_numpy(rgb_np_mask)
+        loss_mask = F.mse_loss(rgb_mask, sketch_mask, reduction="sum") / bs
 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         if rgb_as_latents:
@@ -317,23 +333,22 @@ class ControlNetGuidanceGPU(BaseGuidance):
             # encode image into latents with vae
             latents = self.encode_images(rgb_BCHW_512)
 
-        # ts = []
-        # for b in range(bs):
-        #     t_ = self.Timestep.timestep(idx * bs + b)
-        #     ts.append(t_)
-        # t = torch.tensor(ts, dtype=torch.long, device='cpu')
-        # print('timestep: ', ts)
+        ts = []
+        for b in range(bs):
+            t_ = self.Timestep.timestep(idx * bs + b)
+            ts.append(t_)
+        t = torch.tensor(ts, dtype=torch.long, device='cpu')
 
-        t = torch.randint(
-            self.min_t_step,
-            self.max_t_step + 1,
-            [bs],
-            dtype=torch.long,
-            device=self.device,
-        )
+        # t = torch.randint(
+        #     self.min_t_step,
+        #     self.max_t_step + 1,
+        #     [bs],
+        #     dtype=torch.long,
+        #     device=self.device,
+        # )
 
-        grad, guidance_eval_utils = self.compute_grad_sds(
-            latents, t, prompt_embedding, elevation, azimuth, camera_distance, controlnet_cond, idx
+        grad, guidance_eval_utils, controlnet_cond = self.compute_grad_sds(
+            latents, t, prompt_embedding, elevation, azimuth, camera_distance, controlnet_cond
         )
 
         grad = torch.nan_to_num(grad)
@@ -349,11 +364,21 @@ class ControlNetGuidanceGPU(BaseGuidance):
 
         guidance_out = {
             "loss_sds": loss_sds,
+            "loss_mask": loss_mask,
             "loss_sds_each": loss_sds_each,
             "grad_norm": grad.norm(),
             "min_t_step": self.min_t_step,
             "max_t_step": self.max_t_step,
         }
+
+        if idx % 100 == 0:
+          pred_rgb_ = self.decode_latents(latents)
+          pred_minus_noise = self.decode_latents(grad)
+          target = self.decode_latents(latents - grad)
+          arr = [pred_rgb_, controlnet_cond[0], rgb_mask, sketch_mask, pred_minus_noise, target]
+          viz_images = torch.cat(arr)
+          save_image(viz_images, 'output_%d.png'%idx)
+          del pred_rgb_, pred_minus_noise, target, viz_images, arr
 
         if guidance_eval:
             guidance_eval_out = self.guidance_eval(**guidance_eval_utils)
