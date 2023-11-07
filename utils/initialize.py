@@ -288,10 +288,11 @@ def mesh_initlization(cfg):
     if rgb.shape[-1] == 4:
         rgb = rgb[..., :3]
 
-    # xyz -= xyz.mean(dim=0, keepdim=True)
-
-    # xyz = xyz / (xyz.norm(dim=-1).max() + 1e-5)
-    # xyz = xyz * cfg.mean_std
+    center = xyz.mean(dim=0, keepdim=True)
+    xyz -= xyz.mean(dim=0, keepdim=True)
+    scale = cfg.mean_std / (xyz.norm(dim=-1).max() + 1e-5)
+    xyz = xyz / (xyz.norm(dim=-1).max() + 1e-5)
+    xyz = xyz * cfg.mean_std
 
     # if xyz.shape[0] > cfg.num_points:
     #     _, idx = farthest_point_sampling(xyz, cfg.num_points)
@@ -327,6 +328,8 @@ def mesh_initlization(cfg):
     initial_values["qvec"] = qvec
     initial_values["alpha"] = alpha
     initial_values["raw"] = False
+    initial_values["center"] = center
+    initial_values["scale"] = scale
 
     return initial_values
 

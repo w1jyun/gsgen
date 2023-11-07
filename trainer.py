@@ -130,7 +130,6 @@ class Trainer(nn.Module):
         if self.mode == "text_to_3d":
             self.dataset = CameraPoseProvider(cfg.data)
             # TODO fov
-            self.modelRenderer = ModelRenderer(cfg.init.mesh)
         elif self.mode == "image_to_3d":
             self.dataset = SingleViewCameraPoseProvider(cfg.data)
             self.text_prompt = self.cfg.prompt.prompt
@@ -180,6 +179,7 @@ class Trainer(nn.Module):
         elif self.mode == "text_to_3d":
             initial_values = initialize(cfg.init)
         # initial_values = base_initialize(cfg.init)
+        self.modelRenderer = ModelRenderer(cfg.init.mesh, initial_values["center"], initial_values["scale"])
         self.renderer = GaussianSplattingRenderer(
             cfg.renderer, initial_values=initial_values
         ).to(cfg.device)
