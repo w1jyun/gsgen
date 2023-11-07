@@ -5,13 +5,10 @@ import torch.nn.functional as F
 from diffusers import (
     DDIMScheduler,
     PNDMScheduler,
-    StableDiffusionXLControlNetPipeline,
     ControlNetModel,
     StableDiffusionControlNetPipeline,
 )
 from torchvision.utils import save_image
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error
 
 from .dreamtime import Timestep
 
