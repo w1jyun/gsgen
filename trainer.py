@@ -5,6 +5,10 @@ import datetime
 import warnings
 from pathlib import Path
 import torch
+import random
+import pickle
+from utils.camera import CameraInfo
+
 from tqdm import tqdm
 from PIL import Image, ImageFilter
 import torch.nn as nn
@@ -53,6 +57,23 @@ from model_renderer import ModelRenderer
 import cv2
 
 console = Console()
+
+def get_c2w_from_up_and_look_at(up, look_at, pos):
+    up = up / np.linalg.norm(up)
+    z = look_at - pos
+    z = z / np.linalg.norm(z)
+    y = -up
+    x = np.cross(y, z)
+    x /= np.linalg.norm(x)
+    y = np.cross(z, x)
+
+    c2w = np.zeros([3, 4], dtype=np.float32)
+    c2w[:3, 0] = x
+    c2w[:3, 1] = y
+    c2w[:3, 2] = z
+    c2w[:3, 3] = pos
+
+    return c2w
 
 def HWC3(x):
     assert x.dtype == np.uint8
@@ -214,6 +235,12 @@ class Trainer(nn.Module):
         self.eval_dir = self.save_dir / "eval"
         if not self.eval_dir.exists():
             self.eval_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir = Path(f"./{self.cfg.mesh.split('.')[0]}")
+        if not self.data_dir.exists():
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.prepare_conds()
+        del self.modelRenderer
+        # self.load_conds()
 
         # wandb.tensorboard.patch(root_logdir=str(self.log_dir))
 
@@ -230,6 +257,49 @@ class Trainer(nn.Module):
         self.last_out = None
 
         console.print(f"[red]UID: {uid} started")
+
+    def load_conds(self):
+        for _ in range(100):
+            data_path = 'data%d.pickle'%_
+            self.data_loaded.append(pickle.load(open(self.data_dir / data_path, 'rb')))
+
+    def prepare_conds(self):
+        for _ in tqdm(range(100)):
+            batch = self.dataset.get_circle_pose(_/100.0)
+            controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+            control_conds = []
+            masks = []
+            for control in controls:
+                control = np.array(control)
+                # find mask
+                mask = np.zeros_like(control)
+                H = control.shape[0]
+                W = control.shape[1]
+                for h in range(H):
+                    for w in range(W):
+                        if not np.array_equal(control[h][w], np.array([0,0,255])):
+                            mask[h][w] = [1.0,1.0,1.0]
+                masks.append(mask)
+                # make control image
+                low_threshold = 100
+                high_threshold = 200
+                image = cv2.Canny(control, low_threshold, high_threshold)
+                image = image[:, :, None]
+                image = np.concatenate([image, image, image], axis=2)
+                control = Image.fromarray(image)
+                control_conds.append(control)
+            # save data
+            data = {
+                "out": self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only),
+                "batch": batch,
+                "controlnet_cond": control_conds,
+                "mask": np.array(masks),
+            }
+
+            # self.data_loaded.append(data)
+            data_path = 'data%d.pickle'%_
+            with open(self.data_dir / data_path,'wb') as fw:
+                pickle.dump(data, fw)
 
     @property
     def optimizer(self):
@@ -296,73 +366,132 @@ class Trainer(nn.Module):
 
     def train_step(self, idx):
         self.train()
-        batch = next(self.loader)
-        out = self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only)
-        prompt_embeddings = self.prompt_processor()
+        # data_loaded = self.data_loaded[rn]
+        # batch = data_loaded["batch"]
+        rn = random.randint(0,99)
+        data_path = 'data%d.pickle'% rn
+        data_loaded = pickle.load(open(self.data_dir / data_path, 'rb'))
+        batch = data_loaded["batch"]
+        out = data_loaded["out"]
+
+        # batch = next(self.loader)
+        # prompt_embeddings = self.prompt_processor()
+        # controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+        # control_conds = []
+        # masks = []
+        # for control in controls:
+        #     control = np.array(control)
+        #     # find mask
+        #     mask = np.zeros_like(control)
+        #     H = control.shape[0]
+        #     W = control.shape[1]
+        #     for h in range(H):
+        #         for w in range(W):
+        #             if not np.array_equal(control[h][w], np.array([0,0,255])):
+        #                 mask[h][w] = [1.0,1.0,1.0]
+        #     masks.append(mask)
+        #     # make control image
+        #     low_threshold = 100
+        #     high_threshold = 200
+        #     image = cv2.Canny(control, low_threshold, high_threshold)
+        #     image = image[:, :, None]
+        #     image = np.concatenate([image, image, image], axis=2)
+        #     control = Image.fromarray(image)
+        #     control_conds.append(control)
+            
+            # out["rgb"],
+            # prompt_embeddings,
+            # elevation=batch["elevation"],
+            # azimuth=batch["azimuth"],
+            # camera_distance=batch["camera_distance"],
+            # c2w=batch["c2w"],
+            # controlnet_cond = control_conds,
+            # mask = np.array(masks),
+            # bg = out["bg"],
+            # idx = idx
+            
         guidance_out = None
         ## TODO: calculate control
 
         # change guidance(stable -> control)
-        if idx == 0:
-            del self.guidance, self.prompt_processor
-            self.guidance = get_guidance(self.cfg.guidance2)
-            self.prompt_processor = get_prompt_processor(
-                self.cfg.prompt, guidance_model=self.guidance
-            )
-            gc.collect()
-            torch.cuda.empty_cache()
+        # if idx == 1000:
+        #     del self.guidance, self.prompt_processor
+        #     self.guidance = get_guidance(self.cfg.guidance2)
+        #     self.prompt_processor = get_prompt_processor(
+        #         self.cfg.prompt, guidance_model=self.guidance
+        #     )
+        #     gc.collect()
+        #     torch.cuda.empty_cache()
 
-        if idx < 0:
-            guidance_out = self.guidance(
-                out["rgb"],
-                prompt_embeddings,
-                elevation=batch["elevation"],
-                azimuth=batch["azimuth"],
-                camera_distance=batch["camera_distance"],
-                c2w=batch["c2w"],
-                rgb_as_latents=False,
-            )
-        else:
-            controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
-            control_conds = []
-            masks = []
-            for control in controls:
-                control = np.array(control)
-                # find mask
-                mask = np.zeros_like(control)
-                H = control.shape[0]
-                W = control.shape[1]
-                for h in range(H):
-                    for w in range(W):
-                        if not np.array_equal(control[h][w], np.array([0,0,255])):
-                            mask[h][w] = [1.0,1.0,1.0]
-                masks.append(mask)
-                # make control image
-                low_threshold = 100
-                high_threshold = 200
+        # if idx < 1000:
+            # controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+            # control_conds = []
+            # masks = []
+            # for control in controls:
+            #     control = np.array(control)
+            #     # find mask
+            #     mask = np.zeros_like(control)
+            #     H = control.shape[0]
+            #     W = control.shape[1]
+            #     for h in range(H):
+            #         for w in range(W):
+            #             if not np.array_equal(control[h][w], np.array([0,0,255])):
+            #                 mask[h][w] = [1.0,1.0,1.0]
+            #     masks.append(mask)
+            # guidance_out = self.guidance(
+            #     out["rgb"],
+            #     prompt_embeddings,
+            #     elevation=batch["elevation"],
+            #     azimuth=batch["azimuth"],
+            #     camera_distance=batch["camera_distance"],
+            #     c2w=batch["c2w"],
+            #     rgb_as_latents=False,
+            #     mask = np.array(masks),
+            #     bg = out["bg"],
+            # )
 
-                image = cv2.Canny(control, low_threshold, high_threshold)
-                image = image[:, :, None]
-                image = np.concatenate([image, image, image], axis=2)
-                control = Image.fromarray(image)
-                control_conds.append(control)
-                
-            guidance_out = self.guidance(
-                out["rgb"],
-                prompt_embeddings,
-                elevation=batch["elevation"],
-                azimuth=batch["azimuth"],
-                camera_distance=batch["camera_distance"],
-                c2w=batch["c2w"],
-                rgb_as_latents=False,
-                controlnet_cond = control_conds,
-                mask = np.array(masks),
-                bg = out["bg"],
-                idx = idx
-            )
+        # print(self.data_dir / data_path, data_loaded)
+
+        # # else:
+        # controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+        # control_conds = []
+        # masks = []
+        # for control in controls:
+        #     control = np.array(control)
+        #     # find mask
+        #     mask = np.zeros_like(control)
+        #     H = control.shape[0]
+        #     W = control.shape[1]
+        #     for h in range(H):
+        #         for w in range(W):
+        #             if not np.array_equal(control[h][w], np.array([0,0,255])):
+        #                 mask[h][w] = [1.0,1.0,1.0]
+        #     masks.append(mask)
+        #     # make control image
+        #     low_threshold = 100
+        #     high_threshold = 200
+        #     image = cv2.Canny(control, low_threshold, high_threshold)
+        #     image = image[:, :, None]
+        #     image = np.concatenate([image, image, image], axis=2)
+        #     control = Image.fromarray(image)
+        #     control_conds.append(control)
+        guidance_out = self.guidance(
+            out["rgb"],
+            prompt_embedding = self.prompt_processor(),
+            elevation=batch["elevation"],
+            azimuth=batch["azimuth"],
+            camera_distance=batch["camera_distance"],
+            c2w=batch["c2w"],
+            controlnet_cond = data_loaded["controlnet_cond"],
+            rgb_as_latents=False,
+            mask = data_loaded["mask"],
+            bg = out["bg"],
+            idx = idx
+        )
 
         loss = 0.0
         if "loss_sds" in guidance_out.keys():
+            print("loss_sds",  C(self.cfg.loss.sds, self.step, self.max_steps), guidance_out["loss_sds"])
             loss += (
                 C(self.cfg.loss.sds, self.step, self.max_steps)
                 * guidance_out["loss_sds"]
@@ -378,7 +507,7 @@ class Trainer(nn.Module):
 
         if "loss_mask" in guidance_out.keys():
             loss += (
-                guidance_out["loss_mask"]
+                0.001 * guidance_out["loss_mask"]
             )
             self.writer.add_scalar(
                 "loss_weights/mask",

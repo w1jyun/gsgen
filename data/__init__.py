@@ -306,5 +306,82 @@ class CameraPoseProvider(Dataset):
         writer.add_scalar("data/focal_min", self.get_focal_bound[0], step)
         writer.add_scalar("data/focal_max", self.get_focal_bound[1], step)
 
+    def get_circle_pose(self, ratio):
+        reso = self.get_reso
+        camera_distance = np.random.uniform(*self.camera_distance)
+
+        elevation = self.get_elevation_bound
+        elevation_range_percent = [
+            (elevation[0] + 90.0) / 180.0,
+            (elevation[1] + 90.0) / 180.0,
+        ]
+        elevation_rad = np.arcsin(
+            2
+            * (
+                ratio
+                * (elevation_range_percent[1] - elevation_range_percent[0])
+                + elevation_range_percent[0]
+            )
+            - 1.0
+        )
+        elevation = np.rad2deg(elevation_rad)
+
+        azimuth = self.get_azimuth_bound[0] * ratio + self.get_azimuth_bound[1] * (1 - ratio)
+        azimuth_rad = np.deg2rad(azimuth)
+
+        x = camera_distance * np.cos(elevation_rad) * np.cos(azimuth_rad)
+        y = camera_distance * np.cos(elevation_rad) * np.sin(azimuth_rad)
+        z = camera_distance * np.sin(elevation_rad)
+
+        center = self.center + np.random.randn(3) * self.center_aug_std
+
+        pos = np.array([x, y, z])
+
+        c2w = torch.from_numpy(
+            get_c2w_from_up_and_look_at(
+                self.up,
+                center,
+                pos,
+            )
+        ).to(torch.float32)
+
+        focal = np.random.uniform(*self.get_focal_bound) * reso
+
+        camera_info = CameraInfo(
+            focal,
+            focal,
+            reso / 2.0,
+            reso / 2.0,
+            reso,
+            reso,
+            self.near_plane,
+            self.far_plane,
+        )
+
+        # sample light position
+        light_distances = np.random.uniform(*self.light_distance_range)
+        if self.light_sample == "dreamfusion":
+            light_direction = pos + np.random.randn(3) * self.light_aug_std
+            light_direction /= np.linalg.norm(light_direction)
+            # get light position by scaling light direction by light distance
+            light_positions = (light_direction * light_distances).astype(np.float32)
+        elif self.light_sample == "magic3d":
+            raise NotImplementedError
+        else:
+            raise ValueError(f"Unknown light sample method {self.light_sample}")
+
+        out = {
+            # "pos": pos,
+            "c2w": c2w,
+            "camera_info": camera_info,
+            "elevation": elevation,
+            "azimuth": azimuth,
+            "camera_distance": camera_distance,
+            "light_pos": light_positions,
+            "light_color": torch.ones(3),
+        }
+
+        batch = [out]
+        return self.collate(batch)
 
 from .sit3d import SingleViewCameraPoseProvider
