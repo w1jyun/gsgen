@@ -308,12 +308,11 @@ class CameraPoseProvider(Dataset):
 
     def get_circle_pose(self, ratio):
         reso = self.get_reso
-        camera_distance = np.random.uniform(*self.camera_distance)
+        camera_distance = np.random.uniform(0.8, 2.0)
 
-        elevation = self.get_elevation_bound
         elevation_range_percent = [
-            (elevation[0] + 90.0) / 180.0,
-            (elevation[1] + 90.0) / 180.0,
+            (-20 + 90.0) / 180.0,
+            (90 + 90.0) / 180.0,
         ]
         elevation_rad = np.arcsin(
             2
@@ -326,7 +325,7 @@ class CameraPoseProvider(Dataset):
         )
         elevation = np.rad2deg(elevation_rad)
 
-        azimuth = self.get_azimuth_bound[0] * ratio + self.get_azimuth_bound[1] * (1 - ratio)
+        azimuth = -180 * ratio + 180 * (1 - ratio)
         azimuth_rad = np.deg2rad(azimuth)
 
         x = camera_distance * np.cos(elevation_rad) * np.cos(azimuth_rad)

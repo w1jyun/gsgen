@@ -290,7 +290,6 @@ class Trainer(nn.Module):
                 control_conds.append(control)
             # save data
             data = {
-                "out": self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only),
                 "batch": batch,
                 "controlnet_cond": control_conds,
                 "mask": np.array(masks),
@@ -372,8 +371,7 @@ class Trainer(nn.Module):
         data_path = 'data%d.pickle'% rn
         data_loaded = pickle.load(open(self.data_dir / data_path, 'rb'))
         batch = data_loaded["batch"]
-        out = data_loaded["out"]
-
+        out = self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only)
         # batch = next(self.loader)
         # prompt_embeddings = self.prompt_processor()
         # controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])

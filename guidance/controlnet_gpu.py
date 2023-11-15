@@ -397,7 +397,7 @@ class ControlNetGuidanceGPU(BaseGuidance):
             "min_t_step": self.min_t_step,
             "max_t_step": self.max_t_step,
         }
-        del t, ts
+        del t
         gc.collect()
         torch.cuda.empty_cache()
 
