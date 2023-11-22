@@ -1,7 +1,7 @@
 from . import BaseGuidance
 import torch
 import torch.nn.functional as F
-import gc
+
 from diffusers import (
     DDIMScheduler,
     PNDMScheduler,
@@ -9,7 +9,7 @@ from diffusers import (
     StableDiffusionControlNetPipeline,
 )
 from torchvision.utils import save_image
-import matplotlib.pyplot as plt
+
 from .dreamtime import Timestep
 
 from utils.typing import *
@@ -18,6 +18,8 @@ from utils.misc import C
 from rich.console import Console
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
+
 console = Console()
 
 # from prompt.prompt_processors import BasePromptProcessor, PromptEmbedding
@@ -49,7 +51,7 @@ console = Console()
 #         return text_embeddings
 
 
-class ControlNetGuidanceGPU(BaseGuidance):
+class ControlNetGuidance(BaseGuidance):
     def __init__(self, cfg) -> None:
         super().__init__(cfg)
         self.weights_dtype = (
@@ -249,8 +251,10 @@ class ControlNetGuidanceGPU(BaseGuidance):
                 ).cuda()
 
             # perform guidance (high scale from paper!)
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
@@ -315,24 +319,13 @@ class ControlNetGuidanceGPU(BaseGuidance):
         #     for w in range(W):
         #         if not np.array_equal(rgb_np[h][w], bg_color):
         #             rgb_np_mask[h][w] = [1.0,1.0,1.0]
-        # # rgb_np_mask = np.where(np.array_equal(rgb_np, bg_color), np.array([0,0,0]), np.array([1,1,1]))
-        sketch_mask = mask[0].astype(np.float32)
-        # loss_mask = (F.mse_loss(torch.from_numpy(rgb_np_mask), torch.from_numpy(sketch_mask), reduction="sum") / bs).cuda()
-        
+        # rgb_np_mask = np.where(np.array_equal(rgb_np, bg_color), np.array([0,0,0]), np.array([1,1,1]))
+        sketch_mask = (mask[0].astype(np.float32))
+        # loss_mask = 0.5 * F.mse_loss(torch.from_numpy(rgb_np_mask, requires_grad = True), torch.from_numpy(sketch_mask, requires_grad = True), reduction="sum") / (bs * 3)
         # if idx % 10 == 0:
-        #     plt.imsave("sketch_mask.png", sketch_mask)
-
-
-        # rgb_masked = rgb.clone().detach()
-        # H = sketch_mask.shape[0]
-        # W = sketch_mask.shape[1]
-        # for h in range(H):
-        #     for w in range(W):
-        #         if sum(sketch_mask[h][w]) == 0:
-        #             rgb_masked[0][h][w] = bg_color
-        
+        #     plt.imsave('sketch_mask%d.png'%idx, sketch_mask)
+        #     plt.close()
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
-
         if rgb_as_latents:
             latents = F.interpolate(
                 rgb_BCHW, (64, 64), mode="bilinear", align_corners=False
@@ -343,21 +336,20 @@ class ControlNetGuidanceGPU(BaseGuidance):
             )
             # encode image into latents with vae
             latents = self.encode_images(rgb_BCHW_512)
-            del rgb_BCHW_512
 
-        # ts = []
-        # for b in range(bs):
-        #     t_ = self.Timestep.timestep(idx * bs + b)
-        #     ts.append(t_)
-        # t = torch.tensor(ts, dtype=torch.long, device='cuda')
+        ts = []
+        for b in range(bs):
+            t_ = self.Timestep.timestep(idx * bs + b)
+            ts.append(t_)
+        t = torch.tensor(ts, dtype=torch.long, device='cuda')
 
-        t = torch.randint(
-            self.min_t_step,
-            self.max_t_step + 1,
-            [bs],
-            dtype=torch.long,
-            device=self.device,
-        )
+        # t = torch.randint(
+        #     self.min_t_step,
+        #     self.max_t_step + 1,
+        #     [bs],
+        #     dtype=torch.long,
+        #     device=self.device,
+        # )
 
         grad, guidance_eval_utils, controlnet_cond = self.compute_grad_sds(
             latents, t, prompt_embedding, elevation, azimuth, camera_distance, controlnet_cond
@@ -369,25 +361,23 @@ class ControlNetGuidanceGPU(BaseGuidance):
             grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
 
         target = (latents - grad).detach()
-        # target_img_masked = target_img.clone().detach()[0]
-        # target_img_masked = target_img_masked.permute(1, 2, 0)
-        # for h in range(H):
-        #     for w in range(W):
-        #         if sum(sketch_mask[h][w]) == 0:
-        #             target_img_masked[h][w] = bg_color
-        # target_img_masked = target_img_masked.permute(2, 0, 1)
-        # target_img_masked = target_img_masked.unsqueeze(dim=0)
-        # target = self.encode_images(target_img_masked)
+        target_img = self.decode_latents(target)
+        target_img_masked = target_img.clone().detach()[0]
+        target_img_masked = target_img_masked.permute(1, 2, 0)
+        H = sketch_mask.shape[0]
+        W = sketch_mask.shape[1]
+        for h in range(H):
+            for w in range(W):
+                if sum(sketch_mask[h][w]) == 0:
+                    target_img_masked[h][w] = bg_color
+
+        target_img_masked = target_img_masked.permute(2, 0, 1)
+        target_img_masked = target_img_masked.unsqueeze(dim=0)
+        target = self.encode_images(target_img_masked)
         loss_sds = 0.5 * F.mse_loss(latents, target, reduction="sum") / bs
         loss_sds_each = 0.5 * F.mse_loss(latents, target, reduction="none").sum(
             dim=[1, 2, 3]
         )
-
-        # target = (latents - grad).detach()
-        # loss_sds = 0.5 * F.mse_loss(latents, target, reduction="sum") / bs
-        # loss_sds_each = 0.5 * F.mse_loss(latents, target, reduction="none").sum(
-        #     dim=[1, 2, 3]
-        # )
 
         guidance_out = {
             "loss_sds": loss_sds,
@@ -397,9 +387,6 @@ class ControlNetGuidanceGPU(BaseGuidance):
             "min_t_step": self.min_t_step,
             "max_t_step": self.max_t_step,
         }
-        del t
-        gc.collect()
-        torch.cuda.empty_cache()
 
         if idx % 10 == 0:
           target_img = self.decode_latents(target)

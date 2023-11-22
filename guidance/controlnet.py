@@ -18,6 +18,8 @@ from utils.misc import C
 from rich.console import Console
 import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
+
 console = Console()
 
 # from prompt.prompt_processors import BasePromptProcessor, PromptEmbedding
@@ -70,7 +72,7 @@ class ControlNetGuidance(BaseGuidance):
             success = False
             while not success:
                 try:
-                    self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=self.weights_dtype)
+                    self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-scribble", torch_dtype=self.weights_dtype)
                     self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
                         "runwayml/stable-diffusion-v1-5",
                         controlnet=self.controlnet,
@@ -84,7 +86,7 @@ class ControlNetGuidance(BaseGuidance):
                     success = True
                     break
         else:
-            self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-canny", torch_dtype=self.weights_dtype)
+            self.controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-scribble", torch_dtype=self.weights_dtype)
             self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
                 "runwayml/stable-diffusion-v1-5",
                 controlnet=self.controlnet,
@@ -119,7 +121,7 @@ class ControlNetGuidance(BaseGuidance):
         self.set_min_max_steps()
         self.grad_clip_val = None
         self.alphas = self.scheduler.alphas_cumprod.to(self.device)
-        self.Timestep = Timestep(num_of_timestep=int(self.num_train_timesteps * 0.5), num_of_iters=self.max_steps)
+        self.Timestep = Timestep(num_of_timestep=self.max_t_step, num_of_iters=self.max_steps)
         if self.cfg.enable_attention_slicing:
             # enable GPU VRAM saving, reference: https://huggingface.co/stabilityai/stable-diffusion-2
             self.pipe.enable_attention_slicing(1)
@@ -250,8 +252,10 @@ class ControlNetGuidance(BaseGuidance):
                 ).cpu()
 
             # perform guidance (high scale from paper!)
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
@@ -305,22 +309,23 @@ class ControlNetGuidance(BaseGuidance):
         bs = rgb.shape[0]
         rgb_BCHW_512 = None
 
-        bg_color = (bg[0][0][0]).cpu().numpy()
-        rgb_np = rgb.detach().cpu().numpy()[0]
+        bg_color = (bg[0][0][0]).cpu()
+        # rgb_np = rgb.detach().cpu().numpy()[0]
 
-        # print(rgb_np.shape)
-        rgb_np_mask = np.zeros_like(rgb_np)
-        H = rgb_np.shape[0]
-        W = rgb_np.shape[1]
-        for h in range(H):
-            for w in range(W):
-                if not np.array_equal(rgb_np[h][w], bg_color):
-                    rgb_np_mask[h][w] = [1.0,1.0,1.0]
+        # # print(rgb_np.shape)
+        # rgb_np_mask = np.zeros_like(rgb_np)
+        # H = rgb_np.shape[0]
+        # W = rgb_np.shape[1]
+        # for h in range(H):
+        #     for w in range(W):
+        #         if not np.array_equal(rgb_np[h][w], bg_color):
+        #             rgb_np_mask[h][w] = [1.0,1.0,1.0]
         # rgb_np_mask = np.where(np.array_equal(rgb_np, bg_color), np.array([0,0,0]), np.array([1,1,1]))
-        sketch_mask = torch.from_numpy(mask[0].astype(np.float32))
-        rgb_mask = torch.from_numpy(rgb_np_mask)
-        loss_mask = F.mse_loss(rgb_mask, sketch_mask, reduction="sum") / bs
-
+        sketch_mask = (mask[0].astype(np.float32))
+        # loss_mask = 0.5 * F.mse_loss(torch.from_numpy(rgb_np_mask, requires_grad = True), torch.from_numpy(sketch_mask, requires_grad = True), reduction="sum") / (bs * 3)
+        # if idx % 10 == 0:
+        #     plt.imsave('sketch_mask%d.png'%idx, sketch_mask)
+        #     plt.close()
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         if rgb_as_latents:
             latents = F.interpolate(
@@ -338,7 +343,6 @@ class ControlNetGuidance(BaseGuidance):
             t_ = self.Timestep.timestep(idx * bs + b)
             ts.append(t_)
         t = torch.tensor(ts, dtype=torch.long, device='cpu')
-        print('timestep: ', ts)
 
         # t = torch.randint(
         #     self.min_t_step,
@@ -358,6 +362,19 @@ class ControlNetGuidance(BaseGuidance):
             grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
 
         target = (latents - grad).detach()
+        target_img = self.decode_latents(target)
+        target_img_masked = target_img.clone().detach()[0]
+        target_img_masked = target_img_masked.permute(1, 2, 0)
+        H = sketch_mask.shape[0]
+        W = sketch_mask.shape[1]
+        for h in range(H):
+            for w in range(W):
+                if sum(sketch_mask[h][w]) == 0:
+                    target_img_masked[h][w] = bg_color
+
+        target_img_masked = target_img_masked.permute(2, 0, 1)
+        target_img_masked = target_img_masked.unsqueeze(dim=0)
+        target = self.encode_images(target_img_masked)
         loss_sds = 0.5 * F.mse_loss(latents, target, reduction="sum") / bs
         loss_sds_each = 0.5 * F.mse_loss(latents, target, reduction="none").sum(
             dim=[1, 2, 3]
@@ -365,21 +382,16 @@ class ControlNetGuidance(BaseGuidance):
 
         guidance_out = {
             "loss_sds": loss_sds,
-            "loss_mask": loss_mask,
+            # "loss_mask": loss_mask,
             "loss_sds_each": loss_sds_each,
             "grad_norm": grad.norm(),
             "min_t_step": self.min_t_step,
             "max_t_step": self.max_t_step,
         }
 
-        if idx % 100 == 0:
-          pred_rgb_ = self.decode_latents(latents)
-          pred_minus_noise = self.decode_latents(grad)
-          target = self.decode_latents(latents - grad)
-          arr = [pred_rgb_, controlnet_cond[0], rgb_mask, sketch_mask, pred_minus_noise, target]
-          viz_images = torch.cat(arr)
-          save_image(viz_images, 'output_%d.png'%idx)
-          del pred_rgb_, pred_minus_noise, target, viz_images, arr
+        arr = [rgb_BCHW_512.cpu(), target_img.cpu(), target_img_masked.cpu()]
+        viz_images = torch.cat(arr)
+        save_image(viz_images, './test_output_%d_t_%d.png'%(idx, t[0]))
 
         if guidance_eval:
             guidance_eval_out = self.guidance_eval(**guidance_eval_utils)
