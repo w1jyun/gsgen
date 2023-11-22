@@ -154,15 +154,15 @@ class Trainer(nn.Module):
         elif self.mode == "image_to_3d":
             self.dataset = SingleViewCameraPoseProvider(cfg.data)
             self.text_prompt = self.cfg.prompt.prompt
-        self.loader = iter(
-            DataLoader(
-                self.dataset,
-                batch_size=cfg.batch_size,
-                shuffle=False,
-                collate_fn=self.dataset.collate,
-                num_workers=0,
-            )
-        )
+        # self.loader = iter(
+        #     DataLoader(
+        #         self.dataset,
+        #         batch_size=cfg.batch_size,
+        #         shuffle=False,
+        #         collate_fn=self.dataset.collate,
+        #         num_workers=0,
+        #     )
+        # )
 
         if self.mode == "image_to_3d":
             assert "image" in self.cfg, "image should be provided in image_to_3d mode"
@@ -200,7 +200,6 @@ class Trainer(nn.Module):
         elif self.mode == "text_to_3d":
             initial_values = initialize(cfg.init)
         # initial_values = base_initialize(cfg.init)
-        self.modelRenderer = ModelRenderer(cfg.init.mesh)
         self.renderer = GaussianSplattingRenderer(
             cfg.renderer, initial_values=initial_values
         ).to(cfg.device)
@@ -213,20 +212,10 @@ class Trainer(nn.Module):
         #         self.cfg.auxiliary.get("prompt", self.cfg.prompt.prompt)
         #     )
         
-        self.guidance = get_guidance(cfg.guidance2)
-        if self.cfg.guidance2.get("keep_complete_pipeline", False):
-            self.prompt_processor = get_prompt_processor(
-                cfg.prompt, guidance_model=self.guidance
-            )
-        else:
-            self.prompt_processor = get_prompt_processor(cfg.prompt)
-
-        self.prompt_processor.cleanup()
-
         gc.collect()
         torch.cuda.empty_cache()
 
-        self.save_dir = Path(f"./checkpoints/{prompt}/{day_timestamp}/{hms_timestamp}")
+        self.save_dir = Path(f"./checkpoints/wo_masking_control_plus/{prompt}/{day_timestamp}/{hms_timestamp}")
         if not self.save_dir.exists():
             self.save_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir = Path(f"./logs/{prompt}/{day_timestamp}/{hms_timestamp}")
@@ -238,11 +227,21 @@ class Trainer(nn.Module):
         self.data_dir = Path(f"./{self.cfg.mesh.split('.')[0]}")
         if not self.data_dir.exists():
             self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.prepare_conds()
-        del self.modelRenderer
+            self.modelRenderer = ModelRenderer(cfg.init.mesh)
+            self.prepare_conds()
         # self.load_conds()
 
         # wandb.tensorboard.patch(root_logdir=str(self.log_dir))
+
+        self.guidance = get_guidance(cfg.guidance2)
+        if self.cfg.guidance2.get("keep_complete_pipeline", False):
+            self.prompt_processor = get_prompt_processor(
+                cfg.prompt, guidance_model=self.guidance
+            )
+        else:
+            self.prompt_processor = get_prompt_processor(cfg.prompt)
+
+        self.prompt_processor.cleanup()
 
         overrided_group = self.cfg.get("group", prompt)
         addtional_tags = self.cfg.get("tags", [])
@@ -257,6 +256,7 @@ class Trainer(nn.Module):
         self.last_out = None
 
         console.print(f"[red]UID: {uid} started")
+        # del self.modelRenderer
 
     def load_conds(self):
         for _ in range(100):
@@ -264,8 +264,8 @@ class Trainer(nn.Module):
             self.data_loaded.append(pickle.load(open(self.data_dir / data_path, 'rb')))
 
     def prepare_conds(self):
-        for _ in tqdm(range(100)):
-            batch = self.dataset.get_circle_pose(_/100.0)
+        for _ in tqdm(range(300)):
+            batch = self.dataset.get_circle_pose(_/300.0)
             controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
             control_conds = []
             masks = []
@@ -300,6 +300,39 @@ class Trainer(nn.Module):
             with open(self.data_dir / data_path,'wb') as fw:
                 pickle.dump(data, fw)
 
+    def prepare_conds_hed(self):
+        from controlnet_aux import HEDdetector
+        hed = HEDdetector.from_pretrained('lllyasviel/Annotators').to('cpu')
+        for _ in tqdm(range(300)):
+            batch = self.dataset.get_circle_pose(_/300.0)
+            controls = self.modelRenderer.render(batch["c2w"], batch["camera_info"])
+            control_conds = []
+            masks = []
+            for control in controls:
+                control = np.array(control)
+                # find mask
+                mask = np.zeros_like(control)
+                H = control.shape[0]
+                W = control.shape[1]
+                for h in range(H):
+                    for w in range(W):
+                        if not np.array_equal(control[h][w], np.array([0,0,255])):
+                            mask[h][w] = [1.0,1.0,1.0]
+                masks.append(mask)
+                control = hed(control, scribble=True)
+                control_conds.append(control)
+            # save data
+            data = {
+                "batch": batch,
+                "controlnet_cond": control_conds,
+                "mask": np.array(masks),
+            }
+
+            # self.data_loaded.append(data)
+            data_path = 'data%d.pickle'%_
+            with open(self.data_dir / data_path,'wb') as fw:
+                pickle.dump(data, fw)
+        del hed
     @property
     def optimizer(self):
         return self.renderer.optimizer
@@ -367,8 +400,9 @@ class Trainer(nn.Module):
         self.train()
         # data_loaded = self.data_loaded[rn]
         # batch = data_loaded["batch"]
-        rn = random.randint(0,99)
+        rn = random.randint(0,299)
         data_path = 'data%d.pickle'% rn
+        # print(self.data_dir / data_path)
         data_loaded = pickle.load(open(self.data_dir / data_path, 'rb'))
         batch = data_loaded["batch"]
         out = self.renderer(batch, self.cfg.use_bg, self.cfg.rgb_only)
@@ -627,6 +661,7 @@ class Trainer(nn.Module):
                 "depth" in out.keys()
             ), "depth should be rendered when using depth estimator loss"
             # should add a mask here to filter out the background
+            # out["depth"]: gt
             depth_estimate_loss = depth_loss(
                 self.pearson, depth_estimated, out["depth"]
             )
@@ -771,11 +806,11 @@ class Trainer(nn.Module):
         )
         self.train()
 
-    def train_loop(self):
+    def train_loop(self, start):
         self.train()
 
-        with tqdm(total=self.max_steps - self.start) as pbar:
-            for s in range(self.start, self.max_steps):
+        with tqdm(total=self.max_steps - start) as pbar:
+            for s in range(start, self.max_steps):
                 self.step = s
                 self.update(self.step)
                 self.guidance.log(self.writer, s)
